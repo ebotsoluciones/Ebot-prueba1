@@ -22,12 +22,12 @@ INTERVALO = 30
 
 def cargar_json(path):
     if not os.path.exists(path):
-        return {}
+        return [] if "turnos" in path or "bloqueos" in path else {}
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except:
-        return {}
+        return [] if "turnos" in path or "bloqueos" in path else {}
 
 def guardar_json(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -129,12 +129,12 @@ MENU_ADMIN = """
 
 def procesar(numero, body, resp):
 
-    texto = body.lower()
+    texto = body.lower().strip()
     msg = resp.message()
 
     estado = get_user_state(numero, "estado", "MENU")
 
-    # -------- CONTROL ADMIN (🔥 NUEVO) --------
+    # -------- CONTROL ADMIN --------
 
     if MODO_TEST:
         if texto == "adm":
@@ -147,30 +147,43 @@ def procesar(numero, body, resp):
             msg.body(MENU_ADMIN)
             return
 
-    # RESET MENU
+    # -------- RESET --------
+
     if texto in ["menu", "/start"]:
         set_user_state(numero, "estado", "MENU")
         msg.body(MENU_PACIENTE)
         return
 
-    # ADMIN FLOW
+    # -------- MENSAJE --------
+
+    if estado == "MENSAJE":
+        guardar_mensaje("Paciente", numero, body)
+        msg.body("✅ Mensaje recibido")
+        set_user_state(numero, "estado", "MENU")
+        return
+
+    # -------- ADMIN --------
+
     if estado == "ADMIN":
         manejar_admin(numero, body, msg)
         return
 
-    # MENU
+    # -------- MENU --------
+
     if estado == "MENU":
         manejar_menu(numero, body, msg)
         return
 
-    # TURNO NOMBRE
+    # -------- TURNO NOMBRE --------
+
     if estado == "TURNO_NOMBRE":
         set_user_state(numero, "nombre", body)
         set_user_state(numero, "estado", "TURNO_FECHA")
         msg.body("Ingrese fecha (dd/mm/yyyy)")
         return
 
-    # TURNO FECHA
+    # -------- TURNO FECHA --------
+
     if estado == "TURNO_FECHA":
         try:
             fecha = datetime.strptime(body, "%d/%m/%Y").date()
@@ -203,10 +216,17 @@ def procesar(numero, body, resp):
         msg.body("Horarios:\n" + "\n".join(libres))
         return
 
-    # TURNO HORA
+    # -------- TURNO HORA --------
+
     if estado == "TURNO_HORA":
         hora = body.strip()
         fecha = get_user_state(numero, "fecha")
+
+        horarios = generar_horarios()
+
+        if hora not in horarios:
+            msg.body("❌ Hora inválida. Elegí un horario de la lista")
+            return
 
         if horario_bloqueado(fecha, hora):
             msg.body("Horario bloqueado")
@@ -261,6 +281,11 @@ def manejar_menu(numero, body, msg):
 
     if body == "5":
         msg.body("Horario 09 a 19")
+        return
+
+    if body == "6":
+        clear_user(numero)
+        msg.body("Sesión finalizada")
         return
 
     msg.body(MENU_PACIENTE)
