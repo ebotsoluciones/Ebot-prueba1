@@ -11,6 +11,9 @@ ESTADO_FILE = "data/estado.json"
 
 ADMINS = ["whatsapp:+5493515645624"]
 
+# 🔥 FLAG MODO TEST
+MODO_TEST = True
+
 HORARIO_INICIO = "09:00"
 HORARIO_FIN = "19:00"
 INTERVALO = 30
@@ -19,12 +22,12 @@ INTERVALO = 30
 
 def cargar_json(path):
     if not os.path.exists(path):
-        return []
+        return {}
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except:
-        return []
+        return {}
 
 def guardar_json(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -87,7 +90,8 @@ def turnos_usuario(numero):
 
 def guardar_mensaje(nombre, numero, texto):
     mensajes = cargar_json(MENSAJES_FILE)
-    mensajes.append({
+    mensajes.setdefault("data", [])
+    mensajes["data"].append({
         "nombre": nombre,
         "telefono": numero,
         "mensaje": texto,
@@ -121,7 +125,7 @@ MENU_ADMIN = """
 7 Salir
 """
 
-# ---------------- CORE ----------------
+# ---------------- LOGICA CENTRAL ----------------
 
 def procesar(numero, body, resp):
 
@@ -130,33 +134,43 @@ def procesar(numero, body, resp):
 
     estado = get_user_state(numero, "estado", "MENU")
 
-    if texto in ["menu", "/start"]:
-        set_user_state(numero, "estado", "MENU")
-        msg.body(MENU_ADMIN if numero in ADMINS else MENU_PACIENTE)
-        return
+    # -------- CONTROL ADMIN (🔥 NUEVO) --------
 
-    if texto in ["admin", "adm"]:
+    if MODO_TEST:
+        if texto == "adm":
+            set_user_state(numero, "estado", "ADMIN")
+            msg.body(MENU_ADMIN)
+            return
+    else:
         if numero in ADMINS:
             set_user_state(numero, "estado", "ADMIN")
             msg.body(MENU_ADMIN)
-        else:
-            msg.body("No autorizado")
+            return
+
+    # RESET MENU
+    if texto in ["menu", "/start"]:
+        set_user_state(numero, "estado", "MENU")
+        msg.body(MENU_PACIENTE)
         return
 
+    # ADMIN FLOW
     if estado == "ADMIN":
         manejar_admin(numero, body, msg)
         return
 
+    # MENU
     if estado == "MENU":
         manejar_menu(numero, body, msg)
         return
 
+    # TURNO NOMBRE
     if estado == "TURNO_NOMBRE":
         set_user_state(numero, "nombre", body)
         set_user_state(numero, "estado", "TURNO_FECHA")
         msg.body("Ingrese fecha (dd/mm/yyyy)")
         return
 
+    # TURNO FECHA
     if estado == "TURNO_FECHA":
         try:
             fecha = datetime.strptime(body, "%d/%m/%Y").date()
@@ -173,6 +187,7 @@ def procesar(numero, body, resp):
 
         horarios = generar_horarios()
         turnos = obtener_turnos()
+
         ocupados = [t["hora"] for t in turnos if t["fecha"] == body]
 
         libres = [
@@ -188,6 +203,7 @@ def procesar(numero, body, resp):
         msg.body("Horarios:\n" + "\n".join(libres))
         return
 
+    # TURNO HORA
     if estado == "TURNO_HORA":
         hora = body.strip()
         fecha = get_user_state(numero, "fecha")
@@ -271,7 +287,7 @@ def manejar_admin(numero, body, msg):
         return
 
     if body == "3":
-        mensajes = cargar_json(MENSAJES_FILE)
+        mensajes = cargar_json(MENSAJES_FILE).get("data", [])
         msg.body("Sin mensajes" if not mensajes else "\n".join(
             [f"{m['nombre']}: {m['mensaje']}" for m in mensajes]
         ))
