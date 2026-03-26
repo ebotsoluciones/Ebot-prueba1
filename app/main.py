@@ -1,6 +1,6 @@
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
-from app.bot import procesar 
+from bot import procesar
 
 app = Flask(__name__)
 
