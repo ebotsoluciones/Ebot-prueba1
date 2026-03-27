@@ -1,19 +1,19 @@
 import os
 
-# ---------------- ARCHIVOS ----------------
+# ---------------- RUTAS ----------------
 
-TURNOS_FILE   = "data/turnos.json"
-MENSAJES_FILE = "data/mensajes.json"
-BLOQUEOS_FILE = "data/bloqueos.json"
-ESTADO_FILE   = "data/estado.json"
+BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+TURNOS_FILE   = os.path.join(BASE, "data", "turnos.json")
+MENSAJES_FILE = os.path.join(BASE, "data", "mensajes.json")
+BLOQUEOS_FILE = os.path.join(BASE, "data", "bloqueos.json")
+ESTADO_FILE   = os.path.join(BASE, "data", "estado.json")
 
 # ---------------- ADMINS ----------------
 
 ADMINS = ["whatsapp:+5493515645624"]
 
 # ---------------- MODO TEST ----------------
-# En MODO_TEST cualquiera puede escribir "adm" para entrar al panel admin.
-# En producción solo los números de ADMINS acceden.
 
 MODO_TEST = True
 
@@ -21,4 +21,4 @@ MODO_TEST = True
 
 HORARIO_INICIO = "09:00"
 HORARIO_FIN    = "19:00"
-INTERVALO      = 30          # minutos entre turnos
+INTERVALO      = 30
