@@ -1,38 +1,34 @@
-import json
-import os
-from datetime import datetime, timedelta
+from datetime import datetime
+from storage import cargar_json, guardar_json
+from config  import ADMINS, MODO_TEST, ESTADO_FILE, MENSAJES_FILE
+from services import (
+    generar_horarios, normalizar_hora,
+    horario_bloqueado, bloquear_horario,
+    obtener_turnos, guardar_turnos, turnos_usuario,
+    horarios_libres, agregar_turno, cancelar_turno,
+    guardar_mensaje,
+)
 
-# ---------------- CONFIG ----------------
+# ---------------- MENUS ----------------
 
-TURNOS_FILE = "data/turnos.json"
-MENSAJES_FILE = "data/mensajes.json"
-BLOQUEOS_FILE = "data/bloqueos.json"
-ESTADO_FILE = "data/estado.json"
+MENU_PACIENTE = """🦙 E-Bot
 
-ADMINS = ["whatsapp:+5493515645624"]
+1 Turno
+2 Mis turnos
+3 Mensaje
+4 Urgencia
+5 Informes
+6 Salir"""
 
-# 🔥 FLAG MODO TEST
-MODO_TEST = True
+MENU_ADMIN = """🛠 ADMIN
 
-HORARIO_INICIO = "09:00"
-HORARIO_FIN = "19:00"
-INTERVALO = 30
-
-# ---------------- STORAGE ----------------
-
-def cargar_json(path):
-    if not os.path.exists(path):
-        return [] if "turnos" in path or "bloqueos" in path else {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        return [] if "turnos" in path or "bloqueos" in path else {}
-
-def guardar_json(path, data):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+1 Turnos hoy
+2 Próximos turnos
+3 Mensajes
+4 Nuevo turno
+5 Cancelar turno
+6 Bloquear agenda
+7 Salir"""
 
 # ---------------- ESTADO ----------------
 
@@ -49,112 +45,44 @@ def set_user_state(numero, key, value):
     save_estado(estado)
 
 def get_user_state(numero, key, default=None):
-    estado = get_estado()
-    return estado.get(numero, {}).get(key, default)
+    return get_estado().get(numero, {}).get(key, default)
 
 def clear_user(numero):
     estado = get_estado()
     estado[numero] = {}
     save_estado(estado)
 
-# ---------------- HORARIOS ----------------
-
-def generar_horarios():
-    horarios = []
-    inicio = datetime.strptime(HORARIO_INICIO, "%H:%M")
-    fin = datetime.strptime(HORARIO_FIN, "%H:%M")
-    actual = inicio
-    while actual <= fin:
-        horarios.append(actual.strftime("%H:%M"))
-        actual += timedelta(minutes=INTERVALO)
-    return horarios
-
-# ---------------- BLOQUEOS ----------------
-
-def horario_bloqueado(fecha, hora):
-    bloqueos = cargar_json(BLOQUEOS_FILE)
-    return any(b["fecha"] == fecha and b["hora"] == hora for b in bloqueos)
-
-# ---------------- TURNOS ----------------
-
-def obtener_turnos():
-    return cargar_json(TURNOS_FILE)
-
-def guardar_turnos(data):
-    guardar_json(TURNOS_FILE, data)
-
-def turnos_usuario(numero):
-    return [t for t in obtener_turnos() if t["telefono"] == numero]
-
-# ---------------- MENSAJES ----------------
-
-def guardar_mensaje(nombre, numero, texto):
-    mensajes = cargar_json(MENSAJES_FILE)
-    mensajes.setdefault("data", [])
-    mensajes["data"].append({
-        "nombre": nombre,
-        "telefono": numero,
-        "mensaje": texto,
-        "fecha": datetime.now().isoformat(),
-        "leido": False
-    })
-    guardar_json(MENSAJES_FILE, mensajes)
-
-# ---------------- MENUS ----------------
-
-MENU_PACIENTE = """
-🦙 E-Bot
-
-1 Turno
-2 Mis turnos
-3 Mensaje
-4 Urgencia
-5 Informes
-6 Salir
-"""
-
-MENU_ADMIN = """
-🛠 ADMIN
-
-1 Turnos hoy
-2 Próximos
-3 Mensajes
-4 Nuevo turno
-5 Cancelar turno
-6 Bloquear agenda
-7 Salir
-"""
-
-# ---------------- LOGICA CENTRAL ----------------
+# ---------------- ENTRADA PRINCIPAL ----------------
 
 def procesar(numero, body, resp):
-
     texto = body.lower().strip()
-    msg = resp.message()
-
+    msg   = resp.message()
     estado = get_user_state(numero, "estado", "MENU")
 
-    # -------- CONTROL ADMIN --------
+    # ── ACCESO ADMIN ──────────────────────────────────────────────────────────
 
-    if MODO_TEST:
-        if texto == "adm":
-            set_user_state(numero, "estado", "ADMIN")
-            msg.body(MENU_ADMIN)
-            return
-    else:
-        if numero in ADMINS:
-            set_user_state(numero, "estado", "ADMIN")
-            msg.body(MENU_ADMIN)
-            return
+    if MODO_TEST and texto == "adm":
+        set_user_state(numero, "estado", "ADMIN")
+        msg.body(MENU_ADMIN)
+        return
 
-    # -------- RESET --------
+    if not MODO_TEST and numero in ADMINS and estado != "ADMIN":
+        set_user_state(numero, "estado", "ADMIN")
+        msg.body(MENU_ADMIN)
+        return
+
+    # ── RESET GLOBAL ─────────────────────────────────────────────────────────
 
     if texto in ["menu", "/start"]:
-        set_user_state(numero, "estado", "MENU")
+        clear_user(numero)
         msg.body(MENU_PACIENTE)
         return
 
-    # -------- MENSAJE --------
+    # ── ROUTER ───────────────────────────────────────────────────────────────
+
+    if estado == "ADMIN":
+        manejar_admin(numero, body, msg)
+        return
 
     if estado == "MENSAJE":
         guardar_mensaje("Paciente", numero, body)
@@ -162,170 +90,348 @@ def procesar(numero, body, resp):
         set_user_state(numero, "estado", "MENU")
         return
 
-    # -------- ADMIN --------
-
-    if estado == "ADMIN":
-        manejar_admin(numero, body, msg)
-        return
-
-    # -------- MENU --------
-
     if estado == "MENU":
         manejar_menu(numero, body, msg)
         return
 
-    # -------- TURNO NOMBRE --------
+    # ── FLUJO TURNO PACIENTE ─────────────────────────────────────────────────
 
     if estado == "TURNO_NOMBRE":
         set_user_state(numero, "nombre", body)
         set_user_state(numero, "estado", "TURNO_FECHA")
-        msg.body("Ingrese fecha (dd/mm/yyyy)")
+        msg.body("Ingresá la fecha del turno (dd/mm/yyyy)")
         return
-
-    # -------- TURNO FECHA --------
 
     if estado == "TURNO_FECHA":
-        try:
-            fecha = datetime.strptime(body, "%d/%m/%Y").date()
-        except:
-            msg.body("Formato inválido")
-            return
-
-        if fecha < datetime.now().date():
-            msg.body("Fecha pasada")
-            return
-
-        set_user_state(numero, "fecha", body)
-        set_user_state(numero, "estado", "TURNO_HORA")
-
-        horarios = generar_horarios()
-        turnos = obtener_turnos()
-
-        ocupados = [t["hora"] for t in turnos if t["fecha"] == body]
-
-        libres = [
-            h for h in horarios
-            if h not in ocupados and not horario_bloqueado(body, h)
-        ]
-
-        if not libres:
-            msg.body("Sin horarios disponibles")
-            set_user_state(numero, "estado", "MENU")
-            return
-
-        msg.body("Horarios:\n" + "\n".join(libres))
+        _flujo_turno_fecha(numero, body, msg)
         return
-
-    # -------- TURNO HORA --------
 
     if estado == "TURNO_HORA":
-        hora = body.strip()
-        fecha = get_user_state(numero, "fecha")
-
-        horarios = generar_horarios()
-
-        if hora not in horarios:
-            msg.body("❌ Hora inválida. Elegí un horario de la lista")
-            return
-
-        if horario_bloqueado(fecha, hora):
-            msg.body("Horario bloqueado")
-            return
-
-        turnos = obtener_turnos()
-
-        if any(t["fecha"] == fecha and t["hora"] == hora for t in turnos):
-            msg.body("Ocupado")
-            return
-
-        turnos.append({
-            "nombre": get_user_state(numero, "nombre"),
-            "telefono": numero,
-            "fecha": fecha,
-            "hora": hora
-        })
-
-        guardar_turnos(turnos)
-
-        msg.body(f"✅ Turno confirmado\n{fecha} {hora}")
-
-        clear_user(numero)
+        _flujo_turno_hora(numero, body, msg)
         return
 
-# ---------------- MENU ----------------
+    # ── FLUJO ADMIN ───────────────────────────────────────────────────────────
 
-def manejar_menu(numero, body, msg):
-
-    if body == "1":
-        set_user_state(numero, "estado", "TURNO_NOMBRE")
-        msg.body("Nombre y apellido")
+    if estado == "ADMIN_NUEVO_NOMBRE":
+        set_user_state(numero, "adm_nombre", body)
+        set_user_state(numero, "estado", "ADMIN_NUEVO_TEL")
+        msg.body("Teléfono del paciente (whatsapp:+549XXXXXXXXXX)")
         return
 
-    if body == "2":
-        lista = turnos_usuario(numero)
-        if not lista:
-            msg.body("Sin turnos")
-        else:
-            salida = "\n".join([f"{t['fecha']} {t['hora']}" for t in lista])
-            msg.body(salida)
+    if estado == "ADMIN_NUEVO_TEL":
+        set_user_state(numero, "adm_tel", body)
+        set_user_state(numero, "estado", "ADMIN_NUEVO_FECHA")
+        msg.body("Fecha del turno (dd/mm/yyyy)")
         return
 
-    if body == "3":
-        set_user_state(numero, "estado", "MENSAJE")
-        msg.body("Escriba mensaje")
+    if estado == "ADMIN_NUEVO_FECHA":
+        _flujo_admin_nuevo_fecha(numero, body, msg)
         return
 
-    if body == "4":
-        msg.body("Urgencias: +549000000000")
+    if estado == "ADMIN_NUEVO_HORA":
+        _flujo_admin_nuevo_hora(numero, body, msg)
         return
 
-    if body == "5":
-        msg.body("Horario 09 a 19")
+    if estado == "ADMIN_CANCEL_FECHA":
+        _flujo_admin_cancel_fecha(numero, body, msg)
         return
 
-    if body == "6":
-        clear_user(numero)
-        msg.body("Sesión finalizada")
+    if estado == "ADMIN_CANCEL_HORA":
+        _flujo_admin_cancel_hora(numero, body, msg)
         return
 
+    if estado == "BLOQUEAR_FECHA":
+        _flujo_bloquear_fecha(numero, body, msg)
+        return
+
+    if estado == "BLOQUEAR_HORA":
+        _flujo_bloquear_hora(numero, body, msg)
+        return
+
+    # ── FALLBACK ──────────────────────────────────────────────────────────────
     msg.body(MENU_PACIENTE)
 
-# ---------------- ADMIN ----------------
 
-def manejar_admin(numero, body, msg):
+# ═══════════════════════════════════════════════════════════════════════════════
+# FLUJOS PACIENTE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def manejar_menu(numero, body, msg):
+    opciones = {
+        "1": _iniciar_turno,
+        "2": _mis_turnos,
+        "3": _iniciar_mensaje,
+        "4": _urgencia,
+        "5": _informes,
+        "6": _salir,
+    }
+    accion = opciones.get(body.strip())
+    if accion:
+        accion(numero, msg)
+    else:
+        msg.body(MENU_PACIENTE)
+
+
+def _iniciar_turno(numero, msg):
+    set_user_state(numero, "estado", "TURNO_NOMBRE")
+    msg.body("¿Cuál es tu nombre y apellido?")
+
+def _mis_turnos(numero, msg):
+    lista = turnos_usuario(numero)
+    if not lista:
+        msg.body("No tenés turnos próximos.")
+    else:
+        salida = "\n".join(f"📅 {t['fecha']} {t['hora']}" for t in lista)
+        msg.body(salida)
+
+def _iniciar_mensaje(numero, msg):
+    set_user_state(numero, "estado", "MENSAJE")
+    msg.body("Escribí tu mensaje y lo recibiremos a la brevedad.")
+
+def _urgencia(numero, msg):
+    msg.body("🚨 Urgencias: +549000000000")
+
+def _informes(numero, msg):
+    msg.body("🕘 Horario de atención: 09:00 a 19:00 hs")
+
+def _salir(numero, msg):
+    clear_user(numero)
+    msg.body("Hasta luego 👋")
+
+
+def _flujo_turno_fecha(numero, body, msg):
+    try:
+        fecha = datetime.strptime(body.strip(), "%d/%m/%Y").date()
+    except ValueError:
+        msg.body("❌ Formato inválido. Ingresá dd/mm/yyyy")
+        return
+
+    if fecha < datetime.now().date():
+        msg.body("❌ La fecha ya pasó. Ingresá una fecha futura.")
+        return
+
+    fecha_str = fecha.strftime("%d/%m/%Y")
+    set_user_state(numero, "fecha", fecha_str)
+
+    libres = horarios_libres(fecha_str)
+    if not libres:
+        msg.body("Sin horarios disponibles para esa fecha.")
+        set_user_state(numero, "estado", "MENU")
+        return
+
+    set_user_state(numero, "estado", "TURNO_HORA")
+    msg.body("Horarios disponibles:\n" + "\n".join(libres))
+
+
+def _flujo_turno_hora(numero, body, msg):
+    hora = normalizar_hora(body)
+    if hora is None or hora not in generar_horarios():
+        msg.body("❌ Hora inválida. Elegí un horario de la lista.")
+        return
+
+    fecha = get_user_state(numero, "fecha")
+
+    if horario_bloqueado(fecha, hora):
+        msg.body("❌ Ese horario está bloqueado.")
+        return
 
     turnos = obtener_turnos()
+    if any(t["fecha"] == fecha and t["hora"] == hora for t in turnos):
+        msg.body("❌ Ese horario ya está ocupado. Elegí otro.")
+        return
 
-    if body == "1":
-        hoy = datetime.now().strftime("%d/%m/%Y")
+    nombre = get_user_state(numero, "nombre")
+    agregar_turno(nombre, numero, fecha, hora)
+    msg.body(f"✅ Turno confirmado\n📅 {fecha} a las {hora} hs\nNombre: {nombre}")
+    clear_user(numero)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FLUJOS ADMIN
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def manejar_admin(numero, body, msg):
+    turnos = obtener_turnos()
+
+    if body == "1":   # Turnos hoy
+        hoy  = datetime.now().strftime("%d/%m/%Y")
         lista = [t for t in turnos if t["fecha"] == hoy]
-        msg.body("Sin turnos" if not lista else "\n".join(
-            [f"{t['hora']} {t['nombre']}" for t in lista]
-        ))
+        if not lista:
+            msg.body("Sin turnos para hoy.")
+        else:
+            msg.body("📋 Turnos de hoy:\n" + "\n".join(
+                f"{t['hora']} — {t['nombre']}" for t in sorted(lista, key=lambda x: x["hora"])
+            ))
         return
 
-    if body == "2":
-        futuros = [t for t in turnos if datetime.strptime(t["fecha"], "%d/%m/%Y").date() >= datetime.now().date()]
-        msg.body("Sin futuros" if not futuros else "\n".join(
-            [f"{t['fecha']} {t['hora']} {t['nombre']}" for t in futuros]
-        ))
+    if body == "2":   # Próximos turnos
+        hoy     = datetime.now().date()
+        futuros = [
+            t for t in turnos
+            if datetime.strptime(t["fecha"], "%d/%m/%Y").date() >= hoy
+        ]
+        futuros.sort(key=lambda x: (x["fecha"], x["hora"]))
+        if not futuros:
+            msg.body("Sin turnos próximos.")
+        else:
+            msg.body("📋 Próximos turnos:\n" + "\n".join(
+                f"{t['fecha']} {t['hora']} — {t['nombre']}" for t in futuros
+            ))
         return
 
-    if body == "3":
+    if body == "3":   # Mensajes
         mensajes = cargar_json(MENSAJES_FILE).get("data", [])
-        msg.body("Sin mensajes" if not mensajes else "\n".join(
-            [f"{m['nombre']}: {m['mensaje']}" for m in mensajes]
-        ))
+        if not mensajes:
+            msg.body("Sin mensajes.")
+        else:
+            msg.body("📨 Mensajes:\n" + "\n".join(
+                f"{m['nombre']} ({m['telefono']}): {m['mensaje']}" for m in mensajes
+            ))
         return
 
-    if body == "6":
+    if body == "4":   # Nuevo turno (admin carga manualmente)
+        set_user_state(numero, "estado", "ADMIN_NUEVO_NOMBRE")
+        msg.body("Nombre del paciente")
+        return
+
+    if body == "5":   # Cancelar turno
+        set_user_state(numero, "estado", "ADMIN_CANCEL_FECHA")
+        msg.body("Fecha del turno a cancelar (dd/mm/yyyy)")
+        return
+
+    if body == "6":   # Bloquear agenda
         set_user_state(numero, "estado", "BLOQUEAR_FECHA")
         msg.body("Fecha a bloquear (dd/mm/yyyy)")
         return
 
-    if body == "7":
+    if body == "7":   # Salir
         clear_user(numero)
-        msg.body("Salida admin")
+        msg.body("Salida del panel admin 👋")
         return
 
     msg.body(MENU_ADMIN)
+
+
+# ── Nuevo turno (admin) ───────────────────────────────────────────────────────
+
+def _flujo_admin_nuevo_fecha(numero, body, msg):
+    try:
+        fecha = datetime.strptime(body.strip(), "%d/%m/%Y").date()
+    except ValueError:
+        msg.body("❌ Formato inválido. Ingresá dd/mm/yyyy")
+        return
+
+    fecha_str = fecha.strftime("%d/%m/%Y")
+    set_user_state(numero, "adm_fecha", fecha_str)
+
+    libres = horarios_libres(fecha_str)
+    if not libres:
+        msg.body("Sin horarios disponibles para esa fecha.")
+        set_user_state(numero, "estado", "ADMIN")
+        msg.body(MENU_ADMIN)
+        return
+
+    set_user_state(numero, "estado", "ADMIN_NUEVO_HORA")
+    msg.body("Horarios disponibles:\n" + "\n".join(libres))
+
+
+def _flujo_admin_nuevo_hora(numero, body, msg):
+    hora = normalizar_hora(body)
+    if hora is None or hora not in generar_horarios():
+        msg.body("❌ Hora inválida.")
+        return
+
+    fecha  = get_user_state(numero, "adm_fecha")
+    nombre = get_user_state(numero, "adm_nombre")
+    tel    = get_user_state(numero, "adm_tel")
+
+    if horario_bloqueado(fecha, hora):
+        msg.body("❌ Ese horario está bloqueado.")
+        return
+
+    turnos = obtener_turnos()
+    if any(t["fecha"] == fecha and t["hora"] == hora for t in turnos):
+        msg.body("❌ Ese horario ya está ocupado.")
+        return
+
+    agregar_turno(nombre, tel, fecha, hora)
+    msg.body(f"✅ Turno creado\n{fecha} {hora} — {nombre}")
+    set_user_state(numero, "estado", "ADMIN")
+
+
+# ── Cancelar turno (admin) ────────────────────────────────────────────────────
+
+def _flujo_admin_cancel_fecha(numero, body, msg):
+    try:
+        fecha = datetime.strptime(body.strip(), "%d/%m/%Y").date()
+    except ValueError:
+        msg.body("❌ Formato inválido. Ingresá dd/mm/yyyy")
+        return
+
+    fecha_str = fecha.strftime("%d/%m/%Y")
+    turnos    = obtener_turnos()
+    del_dia   = [t for t in turnos if t["fecha"] == fecha_str]
+
+    if not del_dia:
+        msg.body("No hay turnos en esa fecha.")
+        set_user_state(numero, "estado", "ADMIN")
+        return
+
+    set_user_state(numero, "adm_cancel_fecha", fecha_str)
+    set_user_state(numero, "estado", "ADMIN_CANCEL_HORA")
+    msg.body("Turnos del día:\n" + "\n".join(
+        f"{t['hora']} — {t['nombre']} ({t['telefono']})" for t in del_dia
+    ) + "\n\n¿Qué hora cancelar? (HH:MM)")
+
+
+def _flujo_admin_cancel_hora(numero, body, msg):
+    hora  = normalizar_hora(body)
+    fecha = get_user_state(numero, "adm_cancel_fecha")
+
+    # Buscar el teléfono del turno para cancelarlo
+    turnos = obtener_turnos()
+    turno  = next((t for t in turnos if t["fecha"] == fecha and t["hora"] == hora), None)
+
+    if not turno:
+        msg.body("❌ No se encontró ese turno.")
+        set_user_state(numero, "estado", "ADMIN")
+        return
+
+    cancelar_turno(turno["telefono"], fecha, hora)
+    msg.body(f"✅ Turno cancelado: {fecha} {hora} — {turno['nombre']}")
+    set_user_state(numero, "estado", "ADMIN")
+
+
+# ── Bloquear agenda ───────────────────────────────────────────────────────────
+
+def _flujo_bloquear_fecha(numero, body, msg):
+    try:
+        fecha = datetime.strptime(body.strip(), "%d/%m/%Y").date()
+    except ValueError:
+        msg.body("❌ Formato inválido. Ingresá dd/mm/yyyy")
+        return
+
+    fecha_str = fecha.strftime("%d/%m/%Y")
+    set_user_state(numero, "bloqueo_fecha", fecha_str)
+    set_user_state(numero, "estado", "BLOQUEAR_HORA")
+
+    horarios = generar_horarios()
+    msg.body("Horarios:\n" + "\n".join(horarios) + "\n\n¿Qué hora bloquear? (HH:MM)\nEscribí *todos* para bloquear el día completo.")
+
+
+def _flujo_bloquear_hora(numero, body, msg):
+    fecha = get_user_state(numero, "bloqueo_fecha")
+
+    if body.strip().lower() == "todos":
+        for hora in generar_horarios():
+            bloquear_horario(fecha, hora)
+        msg.body(f"✅ Día {fecha} bloqueado completo.")
+    else:
+        hora = normalizar_hora(body)
+        if hora is None or hora not in generar_horarios():
+            msg.body("❌ Hora inválida.")
+            return
+        bloquear_horario(fecha, hora)
+        msg.body(f"✅ Bloqueado: {fecha} {hora}")
+
+    set_user_state(numero, "estado", "ADMIN")
