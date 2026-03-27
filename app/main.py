@@ -6,17 +6,17 @@ app = Flask(__name__)
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    numero = request.values.get("From")
-    body = request.values.get("Body", "").strip()
-
-    resp = MessagingResponse()
+    numero = request.values.get("From", "")
+    body   = request.values.get("Body", "").strip()
+    resp   = MessagingResponse()
     procesar(numero, body, resp)
-
     return str(resp)
 
 @app.route("/")
 def home():
-    return "E-Bot activo"
+    return "E-Bot activo ✅"
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    import os
+    port = int(os.environ.get("PORT", 5000))   # Railway inyecta PORT automáticamente
+    app.run(host="0.0.0.0", port=port)
